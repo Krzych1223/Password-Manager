@@ -9,11 +9,17 @@ public class SQLiteDriver
     //implement
     private readonly SqliteConnection _connection;
 
+    /**
+     * Initializes empty in-memory database
+     */
     public SQLiteDriver()
     {
         _connection = new SqliteConnection("Data Source=:memory:");
     }
 
+    /**
+     * Deserializes provided byte[] into in-memory database
+     */
     public SQLiteDriver(byte[] databaseBytes)
     {
         var connection = new SqliteConnection(
@@ -21,10 +27,11 @@ public class SQLiteDriver
 
         connection.Open();
 
-        // Allocate memory using SQLite's own allocator.
+        // Allocates memory using SQLite's own allocator.
         long capacity = databaseBytes.LongLength + 1024 * 1024;
 
-        IntPtr buffer = SQLitePCL.raw.sqlite3_malloc64(capacity);
+        
+        IntPtr buffer = raw.sqlite3_malloc64(capacity);
         if (buffer == IntPtr.Zero)
         {
             connection.Dispose();
@@ -42,7 +49,7 @@ public class SQLiteDriver
         const int FREEONCLOSE = 1;
         const int RESIZEABLE = 2;
 
-        int result = SQLitePCL.raw.sqlite3_deserialize(
+        int result = raw.sqlite3_deserialize(
             connection.Handle,
             "main",
             buffer,
@@ -101,6 +108,7 @@ public class SQLiteDriver
 
     public SQLiteDriver ExecuteQuery(SqliteCommand command)
     { 
+        command.Connection = _connection;
         command.ExecuteNonQuery();
         return this; 
     }
