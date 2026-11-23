@@ -121,4 +121,11 @@ public class SQLiteDriver
         }
         return this;
     }
+
+    public SQLiteDriver ExecuteQueryWithResult(SqliteCommand command, out SqliteDataReader reader)
+    {
+        command.Connection = _connection;
+        reader = command.ExecuteReader();
+        return this;
+    }
 }

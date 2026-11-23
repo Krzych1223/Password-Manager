@@ -21,7 +21,8 @@ public class Vault
 
     private const string Extension = ".vlt";
 
-    private Vault(SQLiteDriver db1, SQLiteDriver db2, KDF kdf,  ICipherEngine engine, string fileName, byte[] lockedKey, byte[] hashedKey, byte[] hashedKeySalt)
+    private Vault(SQLiteDriver db1, SQLiteDriver db2, KDF kdf, ICipherEngine engine, string fileName, byte[] lockedKey,
+        byte[] hashedKey, byte[] hashedKeySalt)
     {
         _db1 = db1;
         _db2 = db2;
@@ -33,7 +34,8 @@ public class Vault
         _hashedKeySalt = hashedKeySalt;
     }
 
-    public static Vault Create(string name, byte[] password, string cipher = "AES", bool isCompressed = false, bool isLocked = false)
+    public static Vault Create(string name, byte[] password, string cipher = "AES", bool isCompressed = false,
+        bool isLocked = false)
     {
         //Initializes both databases, creates required tables and relations
         InitDatabases(out SQLiteDriver db1, out SQLiteDriver db2);
@@ -49,7 +51,7 @@ public class Vault
             key = argon2.GenerateKey(password, out byte[] saltS1);
             s1 = saltS1;
             engine = GetEngine(cipher);
-            
+
             byte[] db2Buffer = db2.Serialize();
             encryptedDb2Buffer = engine.Encrypt(db2Buffer, key, 32);
             Array.Fill(db2Buffer, (byte)0);
@@ -59,7 +61,7 @@ public class Vault
 
         byte[] header = new byte[32];
         {
-            
+
             int p = 0;
             for (int i = 0; i < 6; i++)
             {
@@ -95,7 +97,8 @@ public class Vault
             header[p++] = 0xFF;
             header[p++] = 0xFF;
             byte[] timestamp = Utils.LongToByteArray(DateTime.UtcNow.Ticks);
-            if (isLocked) {
+            if (isLocked)
+            {
                 for (int i = 0; i < timestamp.Length; i++)
                 {
                     header[i + p] = timestamp[i];
@@ -106,24 +109,24 @@ public class Vault
             header[p++] = 0x00;
             header[p] = 0x00;
         }
-        byte[] headerChecksum = SHA256.HashData(header);    //TODO: add some sort of a salt for security
+        byte[] headerChecksum = SHA256.HashData(header); //TODO: add some sort of a salt for security
         //key hash
         byte[] passwordHash = HashEngine.SCryptHash(password, out byte[] saltS2);
-        
+
         byte[] buffer = SaveDataToBuffer(
-                header,
-                headerChecksum,
-                db1Buffer,
-                db1Checksum,
-                encryptedDb2Buffer,
-                db2Checksum,
-                s1,
-                passwordHash,
-                saltS2
-            );
-        
+            header,
+            headerChecksum,
+            db1Buffer,
+            db1Checksum,
+            encryptedDb2Buffer,
+            db2Checksum,
+            s1,
+            passwordHash,
+            saltS2
+        );
+
         byte[] locked = EncryptKey(password, s1, headerChecksum, engine);
-        
+
         FileIO.WriteFile(name + Extension, buffer);
         Vault v = new Vault(db1, db2, argon2, engine, name + Extension, locked, passwordHash, saltS2);
         return v;
@@ -133,11 +136,11 @@ public class Vault
     {
         byte[] padding = Enumerable.Repeat<byte>(0xff, 16).ToArray();
         byte[] buffer = FileIO.ReadFile(filename);
-        int part1 = 0,      //header & checksum
-            part2 = -1,     //db1
-            part3 = -1,     //db1 checksum
-            part4 = -1,     //db2 (vault)
-            part5 = -1;     //db2 checksum, key and salts
+        int part1 = 0, //header & checksum
+            part2 = -1, //db1
+            part3 = -1, //db1 checksum
+            part4 = -1, //db2 (vault)
+            part5 = -1; //db2 checksum, key and salts
         for (int i = 0; i < buffer.Length; i += 16)
         {
             var part = buffer.Skip(i).Take(16).ToArray();
@@ -160,6 +163,7 @@ public class Vault
                 part5 = i;
             }
         }
+
         byte[] headerBuffer = buffer.Skip(part1).Take(part2).ToArray();
         byte[] header = headerBuffer.Take(32).ToArray();
         byte[] headerChecksum = headerBuffer.Skip(32).Take(32).ToArray();
@@ -177,7 +181,7 @@ public class Vault
         for (int i = 0; i < 6; i++)
         {
             int activeIndex = arraysQueue[i];
-            int pad =  padQueue[i];
+            int pad = padQueue[i];
             byte[] active = activeIndex switch
             {
                 0 => db2Checksum,
@@ -189,63 +193,66 @@ public class Vault
             {
                 active[j + pad] = footer[j + ptr];
             }
+
             ptr += 16;
         }
-        
-        
+
+
         //validating checksums
-        byte[] db1ChecksumTest =  SHA256.HashData(db1Buffer);
-        byte[] db2ChecksumTest =  SHA256.HashData(db2Buffer);
-        
-        if (!Enumerable.SequenceEqual(db1Checksum, db1ChecksumTest) || !Enumerable.SequenceEqual(db2Checksum, db2ChecksumTest))
+        byte[] db1ChecksumTest = SHA256.HashData(db1Buffer);
+        byte[] db2ChecksumTest = SHA256.HashData(db2Buffer);
+
+        if (!Enumerable.SequenceEqual(db1Checksum, db1ChecksumTest) ||
+            !Enumerable.SequenceEqual(db2Checksum, db2ChecksumTest))
         {
             throw new Exception("File was tampered with or corrupted file");
         }
-        
+
         //initialization of db1
         //created before db2 decryption to record password attempts
         //todo: attempts log
         SQLiteDriver db1 = new SQLiteDriver(db1Buffer);
-        
+
         //validating password
         bool arePasswordsEqual = HashEngine.SCryptValidate(passwordHash, password, saltS2);
         if (!arePasswordsEqual)
         {
             throw new Exception("Invalid password!");
         }
-        
-        
+
+
         //decrypting db2
 
         KDF argon2 = new KDF();
         byte[] key = argon2.GenerateKeyWithSalt(password, saltS1);
         ICipherEngine engine = GetEngine(cipher);
-        
+
         byte[] db2BufferDecrypted = engine.Decrypt(db2Buffer, key, 32);
         Array.Fill(db2Buffer, (byte)0);
-        
+
         //initialization of db2
         SQLiteDriver db2 = new SQLiteDriver(db2BufferDecrypted);
         Array.Fill(db2BufferDecrypted, (byte)0);
 
         byte[] locked = EncryptKey(password, saltS1, headerChecksum, engine);
-        
+
         Vault v = new Vault(db1, db2, argon2, engine, filename, locked, passwordHash, saltS2);
         return v;
     }
 
-    private static byte[] SaveDataToBuffer(byte[] header, byte[] headerChecksum, byte[] db1Buffer, byte[] db1Checksum, byte[] db2Buffer, byte[] db2Checksum, byte[] db2Salt, byte[] hashedKey, byte[] hashedKeySalt)
+    private static byte[] SaveDataToBuffer(byte[] header, byte[] headerChecksum, byte[] db1Buffer, byte[] db1Checksum,
+        byte[] db2Buffer, byte[] db2Checksum, byte[] db2Salt, byte[] hashedKey, byte[] hashedKeySalt)
     {
-        int length = 32 +                           //Header
-                     32 +                           //Header checksum
-                     16 +                           //padding
-                     db1Buffer.Length +             //db1
-                     16 +                           //padding
-                     32 +                           //db1 checksum
-                     16 +                           //padding
-                     db2Buffer.Length +             //vault
-                     16 +                           //padding
-                     96;                            //vault checksum, split & scrambled file password hash, vault salt and password salt
+        int length = 32 + //Header
+                     32 + //Header checksum
+                     16 + //padding
+                     db1Buffer.Length + //db1
+                     16 + //padding
+                     32 + //db1 checksum
+                     16 + //padding
+                     db2Buffer.Length + //vault
+                     16 + //padding
+                     96; //vault checksum, split & scrambled file password hash, vault salt and password salt
 
         byte[] buffer = new byte[length];
         int ptr = 0;
@@ -253,29 +260,33 @@ public class Vault
         {
             buffer[i + ptr] = header[i];
         }
+
         ptr += header.Length;
         for (int i = 0; i < headerChecksum.Length; i++)
         {
             buffer[i + ptr] = headerChecksum[i];
         }
+
         ptr += headerChecksum.Length;
-        
+
         AddPadding(buffer, ptr);
         ptr += 16;
-        
+
         for (int i = 0; i < db1Buffer.Length; i++)
         {
             buffer[i + ptr] = db1Buffer[i];
         }
+
         ptr += db1Buffer.Length;
-        
+
         AddPadding(buffer, ptr);
         ptr += 16;
-        
+
         for (int i = 0; i < db1Checksum.Length; i++)
         {
             buffer[i + ptr] = db1Checksum[i];
         }
+
         ptr += db1Checksum.Length;
         AddPadding(buffer, ptr);
         ptr += 16;
@@ -283,6 +294,7 @@ public class Vault
         {
             buffer[i + ptr] = db2Buffer[i];
         }
+
         ptr += db2Buffer.Length;
         AddPadding(buffer, ptr);
         ptr += 16;
@@ -300,7 +312,7 @@ public class Vault
         for (int i = 0; i < 6; i++)
         {
             int activeIndex = arraysQueue[i];
-            int pad =  padQueue[i];
+            int pad = padQueue[i];
             byte[] active = activeIndex switch
             {
                 0 => db2Checksum,
@@ -312,9 +324,10 @@ public class Vault
             {
                 buffer[j + ptr] = active[j + pad];
             }
+
             ptr += 16;
         }
-        
+
         return buffer;
     }
 
@@ -325,11 +338,11 @@ public class Vault
         Array.Copy(password, 0, keyWithSalt, 0, password.Length);
         Array.Copy(s1, 0, keyWithSalt, password.Length + 1, s1.Length);
         byte[] keyLocked = engine.Encrypt(keyWithSalt, keyPassword);
-        
+
         byte[] locked = new byte[keyLocked.Length + saltS3.Length];
         Array.Copy(keyLocked, 0, locked, 0, keyLocked.Length);
         Array.Copy(saltS3, 0, locked, keyLocked.Length, saltS3.Length);
-        
+
         return locked;
     }
 
@@ -343,13 +356,14 @@ public class Vault
         int separator = passwordWithSalt.IndexOf((byte)0);
         byte[] password = passwordWithSalt.Take(separator).ToArray();
         s1 = passwordWithSalt.Skip(separator + 1).ToArray();
-        
+
         return password;
     }
-        /**
-     * Creates and initializes both databases.
-     * Adds required tables and relations.
-     */
+
+    /**
+    * Creates and initializes both databases.
+    * Adds required tables and relations.
+    */
     private static void InitDatabases(out SQLiteDriver db1, out SQLiteDriver db2)
     {
         string[] sqlCommandsDb1 =
@@ -358,7 +372,8 @@ public class Vault
             @"CREATE TABLE IF NOT EXISTS login_attempts (Id INTEGER PRIMARY KEY AUTOINCREMENT, Time_stamp DateTime NOT NULL, Status_Id INTEGER NOT NULL, FOREIGN KEY(Status_Id) REFERENCES status(Id))",
             @"INSERT INTO status (Status) VALUES ('SUCCESS'), ('FAILED')"
         ];
-        string[] sqlCommandsDb2 = [
+        string[] sqlCommandsDb2 =
+        [
             @"CREATE TABLE IF NOT EXISTS categories (Id INTEGER PRIMARY KEY AUTOINCREMENT, Category TEXT NOT NULL)",
             @"CREATE TABLE IF NOT EXISTS vault (Id INTEGER PRIMARY KEY AUTOINCREMENT, Label TEXT, Login TEXT NOT NULL, Password BLOB NOT NULL, Category_Id INTEGER NOT NULL, FOREIGN KEY(Category_Id) REFERENCES categories(Id))",
             @"INSERT INTO categories (Category) VALUES ('General'), ('Work'), ('Internet'), ('E-Mail'), ('Banking')"
@@ -382,9 +397,10 @@ public class Vault
         {
             return new AesCipherEngine();
         }
+
         throw new Exception("Unknown cipher: " + cipherName);
     }
- 
+
     /**
      * Adds a layer of 16 bytes filled with 0xFF in provided buffer on specified position,
      * to create a border between parts
@@ -399,29 +415,72 @@ public class Vault
     /*-----------------------------------------------------------------------------------------------*/
     /*----------------------------Vault actions------------------------------------------------------*/
 
-    public void AddEntry(string label, string login, byte[] password, int categoryId)
+    public void AddEntry(Entry entry)
     {
         byte[] key = _kdf.GenerateKey(_hashedKey, out byte[] recordSalt);
-        byte[] cipherText = _engine.Encrypt(password, key);
-        byte[] buffer = new byte[cipherText.Length + 1 + recordSalt.Length];
+        byte[] cipherText = _engine.Encrypt(entry.GetPassword(), key);
+        byte[] buffer = new byte[cipherText.Length + recordSalt.Length];
         Array.Copy(cipherText, 0, buffer, 0, cipherText.Length);
         Array.Copy(recordSalt, 0, buffer, cipherText.Length, recordSalt.Length);
-        
-        Array.Clear(password, 0, password.Length);
-        
+
+        Array.Clear(entry.GetPassword(), 0, entry.GetPassword().Length);
+
         SqliteCommand command =
-            new SqliteCommand(@"INSERT INTO vault (Label, Login, Password, Category_Id) VALUES ($label, $login, $password, $categoryId)");
-        command.Parameters.AddWithValue("$label", label);
-        command.Parameters.AddWithValue("$login", login);
+            new SqliteCommand(
+                @"INSERT INTO vault (Label, Login, Password, Category_Id) VALUES ($label, $login, $password, $categoryId)");
+        command.Parameters.AddWithValue("$label", entry.GetLabel());
+        command.Parameters.AddWithValue("$login", entry.GetLogin());
         command.Parameters.AddWithValue("$password", buffer);
-        command.Parameters.AddWithValue("$categoryId", categoryId);
+        command.Parameters.AddWithValue("$categoryId", entry.GetCategoryId());
 
         _db2.Open();
         _db2.ExecuteQuery(command);
         Save();
     }
-    
-    public void Export(string db1Name = "db1",  string db2Name = "db2")
+
+    public Entry? GetEntryById(long id, bool decryptPassword = false)
+    {
+        SqliteCommand command =
+            new SqliteCommand(
+                @"SELECT * FROM vault WHERE Id=$id");
+        command.Parameters.AddWithValue("$id", id);
+
+        _db2.Open();
+        _db2.ExecuteQueryWithResult(command, out SqliteDataReader readerVault);
+
+        if (!readerVault.HasRows)
+        {
+            return null;
+        }
+
+        readerVault.Read();
+
+        SqliteCommand getCategory = new SqliteCommand(@"SELECT Category FROM categories WHERE Id=$id");
+        getCategory.Parameters.AddWithValue("$id", (long)readerVault["category_Id"]);
+
+        _db2.ExecuteQueryWithResult(getCategory, out SqliteDataReader readerCategory);
+        readerCategory.Read();
+
+        string label = (string)readerVault["label"];
+        string login = (string)readerVault["login"];
+        byte[] passwordBlob = (byte[])readerVault["password"];
+        long categoryId = (long)readerVault["category_Id"];
+        string category = (string)readerCategory["Category"];
+        if (!decryptPassword)
+        {
+            Entry entry = new Entry(label, login, passwordBlob, categoryId, category);
+            return entry;
+        }
+        byte[] recordSalt = passwordBlob.TakeLast(16).ToArray();
+        byte[] passphrase = passwordBlob.SkipLast(16).ToArray();
+        byte[] key = _kdf.GenerateKeyWithSalt(_hashedKey, recordSalt);
+        byte[] plainPassword = _engine.Decrypt(passphrase, key);
+        
+        Entry e = new Entry(label, login, plainPassword, categoryId, category);
+        return e;
+    }
+
+    public void Export(string db1Name = "db1", string db2Name = "db2")
     {
         byte[] db1Buffer = _db1.Serialize();
         byte[] db2Buffer = _db2.Serialize();
@@ -441,16 +500,16 @@ public class Vault
         byte[] db1Length = Utils.IntToByteArray(db1Buffer.Length);
         //generate sha256 checksum of db1
         byte[] db1Checksum = SHA256.HashData(db1Buffer);
-        
+
         //override db1 length written in header
         header[6] = db1Length[0];
         header[7] = db1Length[1];
         header[8] = db1Length[2];
         header[9] = db1Length[3];
-        
+
         //recalculate header checksum
         byte[] newHeaderChecksum = SHA256.HashData(header);
-        
+
         //acquire file key from its encrypted storage
         byte[] headerChecksum = fileBuffer.Skip(32).Take(32).ToArray();
         byte[] password = DecryptKey(_lockedKey, headerChecksum, _engine, out byte[] s1);
@@ -473,18 +532,27 @@ public class Vault
         header[15] = db2Length[3];
 
 
-        byte[] buffer = SaveDataToBuffer(
-                header,
-                newHeaderChecksum,
-                db1Buffer,
-                db1Checksum,
-                db2Buffer,
-                db2Checksum,
-                salt,
-                _hashedKey,
-                _hashedKeySalt
+        byte[] buffer = SaveDataToBuffer( header, newHeaderChecksum, 
+            db1Buffer, db1Checksum,
+            db2Buffer, db2Checksum, salt,
+            _hashedKey, _hashedKeySalt
         );
 
         FileIO.WriteFile(FileName, buffer);
+    }
+
+    public class Entry(string label, string login, byte[] password, long categoryId, string? category = null)
+    {
+        private string _label = label;
+        private string _login = login;
+        private byte[] _password = password;
+        private long _categoryId = categoryId;
+        private string? _category = category;
+
+        public string GetLabel() { return _label; }
+        public string GetLogin() { return _login; }
+        public byte[] GetPassword() { return _password; }
+        public long GetCategoryId() { return _categoryId; }
+        public string? GetCategory() { return _category; }
     }
 }
