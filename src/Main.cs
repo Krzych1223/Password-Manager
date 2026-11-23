@@ -15,16 +15,8 @@ public static class MainClass
         byte[] password = "testtest1234141#"u8.ToArray();
 
         // Vault v = Vault.Create("first_vault", password);
-        Vault v = Vault.Open("first_vault.vlt", password);
-        v.AddEntry(new Vault.Entry("test", "Hello World!", "admin1234"u8.ToArray(), 1));
-        Select(v, 1);
-        Console.WriteLine("----------------------------------------");
-        v.UpdatePlainData(1, categoryId: 2);
-        v.UpdatePassword(1, "abcdtest1234"u8.ToArray());
-        Select(v, 1);
-        Select(v, 2);
-        v.DeleteEntry(2);
-        v.Export();
+        Vault v = Vault.Open("chacha.vlt", password, cipher: "ChaCha20");
+        SelectAll(v);
         //v.Export();
     }
 
@@ -44,5 +36,29 @@ public static class MainClass
             Console.WriteLine(entry.GetCategoryId());
             Console.WriteLine(entry.GetCategory());
         }
+    }
+
+    private static void SelectAll(Vault v)
+    {
+        int id = 1;
+        Vault.Entry? entry;
+        do
+        {
+            entry = v.GetEntryById(id++, true);
+            if (entry == null)
+            {
+                Console.WriteLine("No entry found");
+            }
+            else
+            {
+                Console.WriteLine("Found entry");
+                Console.WriteLine(entry.GetLabel());
+                Console.WriteLine(entry.GetLogin());
+                Console.WriteLine(Utils.ByteArrayToString(entry.GetPassword()));
+                Console.WriteLine(entry.GetCategoryId());
+                Console.WriteLine(entry.GetCategory());
+            }
+            Console.WriteLine("----------------");
+        } while (entry != null);
     }
 }

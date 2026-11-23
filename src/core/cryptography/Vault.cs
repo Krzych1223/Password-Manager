@@ -393,12 +393,12 @@ public class Vault
     private static ICipherEngine GetEngine(string cipherName)
     {
         cipherName = cipherName.ToUpper();
-        if (cipherName == "AES")
+        return cipherName switch
         {
-            return new AesCipherEngine();
-        }
-
-        throw new Exception("Unknown cipher: " + cipherName);
+            "A" or "AES" => new AesCipherEngine(),
+            "C" or "CHA" or "CHACHA20" => new ChaChaCipherEngine(),
+            _ => throw new Exception("Unknown cipher: " + cipherName)
+        };
     }
 
     /**
