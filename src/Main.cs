@@ -15,9 +15,22 @@ public static class MainClass
         byte[] password = "testtest1234141#"u8.ToArray();
 
         // Vault v = Vault.Create("first_vault", password);
-        // v.AddEntry(new Vault.Entry("test", "Hello World!", "admin1234"u8.ToArray(), 1));
         Vault v = Vault.Open("first_vault.vlt", password);
-        Vault.Entry? entry = v.GetEntryById(1, true);
+        v.AddEntry(new Vault.Entry("test", "Hello World!", "admin1234"u8.ToArray(), 1));
+        Select(v, 1);
+        Console.WriteLine("----------------------------------------");
+        v.UpdatePlainData(1, categoryId: 2);
+        v.UpdatePassword(1, "abcdtest1234"u8.ToArray());
+        Select(v, 1);
+        Select(v, 2);
+        v.DeleteEntry(2);
+        v.Export();
+        //v.Export();
+    }
+
+    private static void Select(Vault v, long id)
+    {
+        Vault.Entry? entry = v.GetEntryById(id, true);
         if (entry == null)
         {
             Console.WriteLine("No entry found");

@@ -435,7 +435,6 @@ public class Vault
 
         _db2.Open();
         _db2.ExecuteQuery(command);
-        Save();
     }
 
     public Entry? GetEntryById(long id, bool decryptPassword = false)
@@ -480,6 +479,63 @@ public class Vault
         return e;
     }
 
+    public void UpdatePlainData(long id, string? label = null, string? login = null, long? categoryId = null)
+    {
+        string commandBuilder = "UPDATE vault SET ";
+        bool comma = false;
+        if (label != null)
+        {
+            commandBuilder += @"Label=$label";
+            comma = true;
+        }
+        if (login != null)
+        {
+            commandBuilder += comma ? ", " : "" + @"Login=$login";
+            comma = true;
+        }
+
+        if (categoryId != null)
+        {
+            commandBuilder += comma ? ", " : "" + @"Category_Id=$categoryId";
+            comma = true;
+        }
+        
+        commandBuilder += @" WHERE Id=$id";
+        SqliteCommand command = new SqliteCommand(commandBuilder);
+        command.Parameters.AddWithValue("$id", id);
+        if (label != null) command.Parameters.AddWithValue("$label", label);
+        if (login != null) command.Parameters.AddWithValue("$login", login);
+        if (categoryId != null) command.Parameters.AddWithValue("$categoryId", categoryId);
+        _db2.Open();
+        _db2.ExecuteQuery(command);
+    }
+
+    public void UpdatePassword(long id, byte[] plainPassword)
+    {
+        string commandBuilder = "UPDATE vault SET Password=$password WHERE Id=$id";
+        SqliteCommand command = new SqliteCommand(commandBuilder);
+        command.Parameters.AddWithValue("$id", id);
+        
+        byte[] key = _kdf.GenerateKey(_hashedKey, out byte[] recordSalt);
+        byte[] cipherText = _engine.Encrypt(plainPassword, key);
+        byte[] buffer = new byte[cipherText.Length + recordSalt.Length];
+        Array.Copy(cipherText, 0, buffer, 0, cipherText.Length);
+        Array.Copy(recordSalt, 0, buffer, cipherText.Length, recordSalt.Length);
+
+        Array.Clear(plainPassword, 0, plainPassword.Length);
+        
+        command.Parameters.AddWithValue("$password", buffer);
+        _db2.Open();
+        _db2.ExecuteQuery(command);
+    }
+
+    public void DeleteEntry(long id)
+    {
+        SqliteCommand command = new SqliteCommand(@"DELETE FROM vault WHERE Id=$id");
+        command.Parameters.AddWithValue("$id", id);
+        _db2.Open();
+        _db2.ExecuteQuery(command);
+    }
     public void Export(string db1Name = "db1", string db2Name = "db2")
     {
         byte[] db1Buffer = _db1.Serialize();
