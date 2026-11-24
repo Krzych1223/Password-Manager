@@ -113,6 +113,15 @@ public class SQLiteDriver
         return this; 
     }
 
+    public SQLiteDriver ExecuteAlQueries(SqliteCommand[] commands)
+    {
+        foreach (var command in commands)
+        {
+            ExecuteQuery(command);
+        }
+        return this;
+    }
+
     public SQLiteDriver ExecuteAllQueriesString(string[] queries)
     {
         foreach (var query in queries)

@@ -109,4 +109,9 @@ public class AesCipherEngine: ICipherEngine
 
         return plaintext;
     }
+
+    public byte CipherSignHex()
+    {
+        return 0xA0;
+    }
 }

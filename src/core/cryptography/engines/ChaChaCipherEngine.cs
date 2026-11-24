@@ -102,4 +102,9 @@ public class ChaChaCipherEngine : ICipherEngine
 
         return plaintext;
     }
+
+    public byte CipherSignHex()
+    {
+        return 0xC0;
+    }
 }

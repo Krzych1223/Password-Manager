@@ -1,5 +1,6 @@
 ﻿using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
+using Org.BouncyCastle.Utilities;
 using Password_Manager.core.cryptography.engines;
 using Password_Manager.core.io;
 using Password_Manager.core.sqlite;
@@ -16,13 +17,14 @@ public class Vault
     private byte[] _lockedKey;
     private byte[] _hashedKey;
     private byte[] _hashedKeySalt;
+    private Logger _logger;
 
     private static readonly byte[] Header = [0x76, 0x61, 0x75, 0x6C, 0x74, 0xFF];
 
     private const string Extension = ".vlt";
 
     private Vault(SQLiteDriver db1, SQLiteDriver db2, KDF kdf, ICipherEngine engine, string fileName, byte[] lockedKey,
-        byte[] hashedKey, byte[] hashedKeySalt)
+        byte[] hashedKey, byte[] hashedKeySalt,  Logger logger)
     {
         _db1 = db1;
         _db2 = db2;
@@ -32,6 +34,7 @@ public class Vault
         _lockedKey = lockedKey;
         _hashedKey = hashedKey;
         _hashedKeySalt = hashedKeySalt;
+        _logger = logger;
     }
 
     public static Vault Create(string name, byte[] password, string cipher = "AES", bool isCompressed = false,
@@ -43,12 +46,12 @@ public class Vault
         byte[] db1Buffer = db1.Serialize();
         byte[] db1Checksum = SHA256.HashData(db1Buffer);
         //encryption salt, key and passphrase
-        byte[] s1, key, encryptedDb2Buffer;
+        byte[] s1, encryptedDb2Buffer;
         KDF argon2;
         ICipherEngine engine;
         {
             argon2 = new KDF();
-            key = argon2.GenerateKey(password, out byte[] saltS1);
+            byte[] key = argon2.GenerateKey(password, out byte[] saltS1);
             s1 = saltS1;
             engine = GetEngine(cipher);
 
@@ -91,6 +94,7 @@ public class Vault
             {
                 flag = (byte)(isCompressed ? 1 : 0);
                 flag |= (byte)(isLocked ? 2 : 0);
+                flag |= engine.CipherSignHex();
             }
             header[p++] = flag;
             header[p++] = 0xFF;
@@ -128,11 +132,12 @@ public class Vault
         byte[] locked = EncryptKey(password, s1, headerChecksum, engine);
 
         FileIO.WriteFile(name + Extension, buffer);
-        Vault v = new Vault(db1, db2, argon2, engine, name + Extension, locked, passwordHash, saltS2);
+        Vault v = new Vault(db1, db2, argon2, engine, name + Extension, locked, passwordHash, saltS2, new Logger(db1));
+        v._logger.SetDb2(db2);
         return v;
     }
 
-    public static Vault Open(string filename, byte[] password, string cipher = "AES")
+    public static Vault Open(string filename, byte[] password)
     {
         byte[] padding = Enumerable.Repeat<byte>(0xff, 16).ToArray();
         byte[] buffer = FileIO.ReadFile(filename);
@@ -197,6 +202,23 @@ public class Vault
             ptr += 16;
         }
 
+        //checking whether file is locked
+        bool isLocked = (header[18] & 0X0F) == 2;
+        if (isLocked)
+        {
+            long timestamp = DateTime.Now.Ticks;
+            long timestampFile = Utils.ByteArrayToLong(header.Skip(21).Take(8).ToArray());
+            if (timestamp < timestampFile)
+            {
+                throw new Exception("File is locked");
+            }
+
+            header[18] ^= 0x02;     //if lock time has passed, remove flag and clear timestamp
+            for (int i = 0; i < 8; i++)
+            {
+                header[i + 22] = 0x00;
+            }
+        }
 
         //validating checksums
         byte[] db1ChecksumTest = SHA256.HashData(db1Buffer);
@@ -212,11 +234,16 @@ public class Vault
         //created before db2 decryption to record password attempts
         //todo: attempts log
         SQLiteDriver db1 = new SQLiteDriver(db1Buffer);
+        Logger logger = new Logger(db1);
 
         //validating password
         bool arePasswordsEqual = HashEngine.SCryptValidate(passwordHash, password, saltS2);
+        logger.LogAttempt(arePasswordsEqual);
+        //update db1 portion of file to include logs in case of app crash
+        UpdateLogsInFile(filename, db1, part4);
         if (!arePasswordsEqual)
         {
+            
             throw new Exception("Invalid password!");
         }
 
@@ -225,7 +252,7 @@ public class Vault
 
         KDF argon2 = new KDF();
         byte[] key = argon2.GenerateKeyWithSalt(password, saltS1);
-        ICipherEngine engine = GetEngine(cipher);
+        ICipherEngine engine = GetEngine( (header[18] & 0xF0) >> 4 == 0xA ? "AES" : "CHACHA20" );
 
         byte[] db2BufferDecrypted = engine.Decrypt(db2Buffer, key, 32);
         Array.Fill(db2Buffer, (byte)0);
@@ -236,8 +263,51 @@ public class Vault
 
         byte[] locked = EncryptKey(password, saltS1, headerChecksum, engine);
 
-        Vault v = new Vault(db1, db2, argon2, engine, filename, locked, passwordHash, saltS2);
+        logger.SetDb2(db2);
+        Vault v = new Vault(db1, db2, argon2, engine, filename, locked, passwordHash, saltS2, logger);
         return v;
+    }
+
+    private static void UpdateLogsInFile(string filename, SQLiteDriver driver, int databasesDividerIndex)
+    {
+        byte[] buffer = FileIO.ReadFile(filename);
+        
+        byte[] serializedDriver = driver.Serialize();
+        int len = serializedDriver.Length;
+        byte[] length = Utils.IntToByteArray(len);
+        byte[] db1Checksum = SHA256.HashData(serializedDriver);
+        
+        Array.Resize(ref serializedDriver, serializedDriver.Length + 48);
+        for (int i = 0; i < 16; i++)
+        {
+            serializedDriver[i + len] = 0xFF;
+        }
+
+        for (int i = 16; i < 48; i++)
+        {
+            serializedDriver[i + len] = db1Checksum[i - 16];
+        }
+
+
+        byte[] db1LengthFromHeader = buffer.Skip(6).Take(4).ToArray();
+        if (!Arrays.AreEqual(db1LengthFromHeader, length))
+        {
+            //length has changed, header and checksum update required
+            for (int i = 0; i < 4; i++)
+            {
+                buffer[i + 6] = length[i];
+            }
+
+            byte[] header = buffer.Take(32).ToArray();
+            byte[] checksum = SHA256.HashData(header);
+            for (int i = 0; i < 32; i++)
+            {
+                buffer[i + 32] = checksum[i];
+            }
+        }
+        //if lengths are equal, just update db1 content
+        buffer = buffer.Take(80).Concat(serializedDriver).Concat(buffer.Skip(databasesDividerIndex)).ToArray();
+        FileIO.WriteFile(filename, buffer);
     }
 
     private static byte[] SaveDataToBuffer(byte[] header, byte[] headerChecksum, byte[] db1Buffer, byte[] db1Checksum,
@@ -369,7 +439,9 @@ public class Vault
         string[] sqlCommandsDb1 =
         [
             @"CREATE TABLE IF NOT EXISTS status (Id INTEGER PRIMARY KEY AUTOINCREMENT, Status TEXT NOT NULL)",
-            @"CREATE TABLE IF NOT EXISTS login_attempts (Id INTEGER PRIMARY KEY AUTOINCREMENT, Time_stamp DateTime NOT NULL, Status_Id INTEGER NOT NULL, FOREIGN KEY(Status_Id) REFERENCES status(Id))",
+            @"CREATE TABLE IF NOT EXISTS login_attempts (Id INTEGER PRIMARY KEY AUTOINCREMENT, Time_stamp TEXT NOT NULL, Status_Id INTEGER NOT NULL, FOREIGN KEY(Status_Id) REFERENCES status(Id))",
+            @"CREATE TABLE IF NOT EXISTS attempts_remaining (Value INTEGER)",
+            @"INSERT INTO attempts_remaining VALUES (0)",
             @"INSERT INTO status (Status) VALUES ('SUCCESS'), ('FAILED')"
         ];
         string[] sqlCommandsDb2 =
@@ -542,6 +614,12 @@ public class Vault
         byte[] db2Buffer = _db2.Serialize();
         FileIO.WriteFile(db1Name + ".db", db1Buffer);
         FileIO.WriteFile(db2Name + ".db", db2Buffer);
+    }
+
+    public void TruncateLogs()
+    {
+        _logger.ClearLogs();
+        Save();
     }
 
     public void Save()
